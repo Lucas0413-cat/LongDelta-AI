@@ -1,0 +1,54 @@
+# LongDelta-AI Docker Compose Configuration
+
+services:
+  # Backend API Service
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: longdelta-api
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - LLM_BASE_URL=${LLM_BASE_URL}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_MODEL=${LLM_MODEL}
+      - PYTHONPATH=/app
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Frontend Streamlit Service
+  frontend:
+    image: python:3.12-slim
+    container_name: longdelta-frontend
+    ports:
+      - "8501:8501"
+    working_dir: /app
+    volumes:
+      - ./app.py:/app/app.py
+      - ./src:/app/src
+      - ./data:/app/data
+    environment:
+      - LLM_BASE_URL=${LLM_BASE_URL}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_MODEL=${LLM_MODEL}
+      - PYTHONPATH=/app
+      # 使用 Docker 服务名连接后端，而不是 localhost
+      - API_BASE=http://api:8000
+    command: >
+      sh -c "pip install streamlit plotly --quiet &&
+             streamlit run /app/app.py --server.port=8501 --server.address=0.0.0.0"
+    restart: unless-stopped
+    depends_on:
+      - api
+
+networks:
+  default:
+    name: longdelta-network

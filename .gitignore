@@ -1,0 +1,25 @@
+# secrets
+.env
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.uv/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+wheels/
+
+# os/editor
+.DS_Store
+.vscode/
+.idea/
+
+# streamlit
+.streamlit/
+
+# docker
+.ruff_cache/
