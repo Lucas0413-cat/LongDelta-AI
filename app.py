@@ -713,7 +713,7 @@ def main():
         # 响应完成后显示"滚动到底部"按钮
         col1, col2, col3 = st.columns([1, 1, 1])
         with col2:
-            if st.button("📜 滚动到底部查看响应", use_container_width=True, key=f"scroll_bottom_{new_request_id}"):
+            if st.button("📜 点击查看文本", use_container_width=True, key=f"scroll_bottom_{new_request_id}"):
                 scroll_to_bottom()
 
 
