@@ -506,6 +506,23 @@ def scroll_to_top():
     )
 
 
+def scroll_to_bottom():
+    """滚动到页面底部（响应结果位置）"""
+    st.components.v1.html(
+        """
+        <script>
+        setTimeout(function() {
+            const elements = document.querySelectorAll('[data-testid="stChatMessageContent"]');
+            if (elements.length > 0) {
+                elements[elements.length - 1].scrollIntoView({behavior: "smooth", block: "center"});
+            }
+        }, 100);
+        </script>
+        """,
+        height=0
+    )
+
+
 def init_session_state():
     """Initialize session state for interrupt handling."""
     if "request_id" not in st.session_state:
@@ -690,8 +707,11 @@ def main():
         # Reset processing flag
         st.session_state.processing = False
 
-        # 响应完成后滚动到用户问题位置
-        scroll_to_top()
+        # 响应完成后显示"滚动到底部"按钮
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            if st.button("📜 滚动到底部查看响应", use_container_width=True, key=f"scroll_bottom_{new_request_id}"):
+                scroll_to_bottom()
 
 
 if __name__ == "__main__":
