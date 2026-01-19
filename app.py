@@ -566,7 +566,10 @@ def main():
 
     # Main content
     st.title("🏢 长三角经济分析助手")
-    st.markdown("输入您的问题，获取智能分析报告")
+    
+    # 仅在没有消息时显示提示文字
+    if not st.session_state.get("messages"):
+        st.markdown("输入您的问题，获取智能分析报告")
 
     # Chat input
     if "messages" not in st.session_state:
