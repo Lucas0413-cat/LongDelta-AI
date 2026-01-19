@@ -6,10 +6,13 @@ Features:
 - Real-time message display with auto-scroll
 - Interrupt handling for concurrent requests
 - Chart rendering with None tolerance
+- Formula detection and conversion
 """
 from __future__ import annotations
 
 import json
+import os
+import re
 import uuid
 
 import requests
@@ -24,8 +27,188 @@ st.set_page_config(
 )
 
 # API endpoint - 从环境变量读取
-import os
 API_BASE = os.environ.get("API_BASE", "http://localhost:8000")
+
+
+def eval_formula(formula: str) -> str | None:
+    """评估公式表达式，返回计算后的数值字符串
+
+    支持格式:
+    - math.round(x * 10000) / 100
+    - math.round(x) / 100
+    - round(x * 100) / 100
+    - (a - b) / b * 100
+    - x * 100
+    """
+    if not formula or not isinstance(formula, str):
+        return None
+
+    formula = formula.strip()
+
+    # 0. 处理 math.round(x) / divisor 格式 (无乘法)
+    # 如: math.round(3.2300) / 100 -> 3.23
+    simple_round_pattern = r"math\.round\(([\d.]+)\)\s*/\s*([\d.]+)"
+    match = re.search(simple_round_pattern, formula)
+    if match:
+        try:
+            num = float(match.group(1))
+            divisor = float(match.group(2))
+            if divisor != 0:
+                result = round(num) / divisor
+                return f"{result:.2f}"
+        except (ValueError, ZeroDivisionError):
+            pass
+
+    # 1. 处理更通用的 math.round(x * 1000) / 10 格式
+    # 支持任意乘数和除数
+    generic_round_pattern = r"math\.round\(([\d.]+)\s*\*\s*([\d.]+)\)\s*/\s*([\d.]+)"
+    match = re.search(generic_round_pattern, formula)
+    if match:
+        try:
+            num = float(match.group(1))
+            multiplier = float(match.group(2))
+            divisor = float(match.group(3))
+            if divisor != 0:
+                result = round(num * multiplier) / divisor
+                return f"{result:.2f}"
+        except (ValueError, ZeroDivisionError):
+            pass
+
+    # 2. 处理 math.round(...) / divisor 格式
+    # 如: math.round(0.0323 * 10000) / 100 -> 3.23
+    round_pattern = r"math\.round\(([\d.]+)\s*\*\s*(\d+)\)\s*/\s*(\d+)"
+    match = re.search(round_pattern, formula)
+    if match:
+        try:
+            num = float(match.group(1))
+            multiplier = int(match.group(2))
+            divisor = int(match.group(3))
+            result = round(num * multiplier) / divisor
+            return f"{result:.2f}"
+        except (ValueError, ZeroDivisionError):
+            pass
+
+    # 3. 处理 round(x * 100) / 100 格式
+    round_pattern2 = r"round\(([\d.]+)\s*\*\s*(\d+)\)\s*/\s*(\d+)"
+    match = re.search(round_pattern2, formula)
+    if match:
+        try:
+            num = float(match.group(1))
+            multiplier = int(match.group(2))
+            divisor = int(match.group(3))
+            result = round(num * multiplier) / divisor
+            return f"{result:.2f}"
+        except (ValueError, ZeroDivisionError):
+            pass
+
+    # 4. 处理 (a - b) / b * 100 格式 (计算百分比变化)
+    pct_pattern = r"\(([\d.]+)\s*-\s*([\d.]+)\)\s*/\s*([\d.]+)\s*\*\s*100"
+    match = re.search(pct_pattern, formula)
+    if match:
+        try:
+            a = float(match.group(1))
+            b = float(match.group(2))
+            if b != 0:
+                result = ((a - b) / b) * 100
+                return f"{result:.2f}"
+        except (ValueError, ZeroDivisionError):
+            pass
+
+    # 5. 处理简单的 x * 100 格式
+    simple_pattern = r"^([\d.]+)\s*\*\s*100$"
+    match = re.match(simple_pattern, formula)
+    if match:
+        try:
+            num = float(match.group(1))
+            result = num * 100
+            return f"{result:.2f}"
+        except ValueError:
+            pass
+
+    return None
+
+
+def clean_formulas_in_text(text: str) -> str:
+    """清理文本中的公式，将其替换为计算后的数值"""
+    if not text or not isinstance(text, str):
+        return text
+
+    # 递归替换所有公式格式
+    def replace_formula(match):
+        full_match = match.group(0)
+        result = eval_formula(full_match)
+        return result if result is not None else full_match
+
+    # 匹配各种公式模式
+    patterns = [
+        r"math\.round\([\d.]+\)\s*/\s*[\d.]+",  # math.round(x)/... (无乘法)
+        r"math\.round\([\d.]+\s*\*\s*[\d.]+\)\s*/\s*[\d.]+",  # math.round(...)/... (通用)
+        r"round\([\d.]+\s*\*\s*\d+\)\s*/\s*\d+",        # round(...)/...
+        r"\([\d.]+\s*-\s*[\d.]+\)\s*/\s*[\d.]+\s*\*\s*100",  # (a-b)/b*100
+        r"[\d.]+\s*\*\s*100",  # x*100
+    ]
+
+    for pattern in patterns:
+        text = re.sub(pattern, replace_formula, text)
+
+    return text
+
+
+def clean_report_data(data: dict) -> dict:
+    """清理报告数据中的所有公式"""
+    if not isinstance(data, dict):
+        return data
+
+    cleaned = {}
+    for key, value in data.items():
+        if isinstance(value, str):
+            # 清理字符串中的公式
+            cleaned[key] = clean_formulas_in_text(value)
+        elif isinstance(value, dict):
+            # 递归处理嵌套字典
+            cleaned[key] = clean_report_data(value)
+        elif isinstance(value, list):
+            # 处理列表
+            cleaned[key] = [
+                clean_report_data(item) if isinstance(item, dict) else item
+                for item in value
+            ]
+        else:
+            cleaned[key] = value
+
+    return cleaned
+
+
+def parse_growth_rate(value):
+    """解析增长率，处理公式或数字格式，返回保留两位小数的百分数字符串"""
+    if value is None:
+        return ""
+
+    # 如果已经是数字
+    if isinstance(value, (int, float)):
+        return f"{value:.2f}%"
+
+    # 如果是字符串，先尝试清理公式
+    if isinstance(value, str):
+        # 尝试直接解析为数字
+        try:
+            num = float(value.strip())
+            return f"{num:.2f}%"
+        except ValueError:
+            pass
+
+        # 尝试清理公式
+        cleaned = clean_formulas_in_text(value.strip())
+        if cleaned != value:
+            try:
+                num = float(cleaned)
+                return f"{num:.2f}%"
+            except ValueError:
+                pass
+
+        return cleaned
+
+    return str(value)
 
 
 def render_chart(chart_data: dict | None):
@@ -78,15 +261,26 @@ def render_analysis_report(data: dict):
     if not isinstance(data, dict):
         return
 
+    # 先清理数据中的所有公式
+    data = clean_report_data(data)
+
     # 数据概览
     st.markdown("### 📊 分析报告")
 
     col1, col2, col3 = st.columns(3)
     with col1:
+        # 获取并解析增长率
+        growth_rate_value = data.get('growth_rate_percent', {})
+        if isinstance(growth_rate_value, dict):
+            rate_value = growth_rate_value.get('value', 0)
+        else:
+            rate_value = growth_rate_value
+        parsed_rate = parse_growth_rate(rate_value)
+
         st.metric(
             label=data.get("region", "") + " " + data.get("indicator", ""),
             value=f"{data.get('value_current', 0):,.2f}",
-            delta=f"{data.get('growth_rate_percent', {}).get('value', 0)}%" if isinstance(data.get('growth_rate_percent'), dict) else str(data.get('growth_rate_percent', ''))
+            delta=parsed_rate
         )
     with col2:
         st.metric(
@@ -108,11 +302,23 @@ def render_analysis_report(data: dict):
     st.info(data.get("conclusion", ""))
 
     # 增长详情
-    if isinstance(data.get("growth_rate_percent"), dict):
-        gr = data["growth_rate_percent"]
-        st.markdown(f"**增长率**: {gr.get('value', '')}{gr.get('unit', '')} ({gr.get('note', '')})")
+    growth_rate_data = data.get("growth_rate_percent", {})
+
+    if isinstance(growth_rate_data, dict):
+        # LLM 返回 dict 格式: {"value": 3.23, "unit": "%", "description": "..."}
+        rate_value = growth_rate_data.get('value', '')
+        unit = growth_rate_data.get('unit', '')
+        # 优先使用 description，如果没有则使用 value
+        note = growth_rate_data.get('description', '') or growth_rate_data.get('note', '')
+        parsed_rate = parse_growth_rate(rate_value)
+        st.markdown(f"**增长率**: {parsed_rate} {unit} ({note})")
+    elif isinstance(growth_rate_data, str):
+        # 原始字符串格式
+        parsed_rate = parse_growth_rate(growth_rate_data)
+        st.markdown(f"**增长率**: {parsed_rate}")
     else:
-        st.markdown(f"**增长率**: {data.get('growth_rate_percent', '')}")
+        # 其他情况
+        st.markdown(f"**增长率**: {str(growth_rate_data)}")
 
     st.markdown("---")
 
@@ -138,6 +344,9 @@ def render_multi_region_report(data: dict):
     """美化的多地区对比报告渲染"""
     if not isinstance(data, dict):
         return
+
+    # 先清理数据中的所有公式
+    data = clean_report_data(data)
 
     st.markdown("### 📊 多地区对比分析")
 
@@ -282,14 +491,15 @@ def parse_report_data(content: str) -> dict:
         return {}
 
 
-def scroll_to_bottom():
+def scroll_to_top():
+    """滚动到页面顶部（用户问题位置）"""
     st.components.v1.html(
         """
         <script>
         setTimeout(function() {
-            const el = document.getElementById("chat-bottom");
-            if (el) el.scrollIntoView({behavior: "auto", block: "end", inline: "nearest"});
-        }, 100);
+            const el = document.getElementById("question-top");
+            if (el) el.scrollIntoView({behavior: "smooth", block: "start"});
+        }, 300);
         </script>
         """,
         height=0
@@ -345,9 +555,9 @@ def main():
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # Auto-scroll to bottom on new message
-    if st.session_state.processing:
-        scroll_to_bottom()
+    # 问题锚点 - 用于滚动到用户问题位置
+    question_anchor = st.empty()
+    question_anchor.markdown('<div id="question-top"></div>', unsafe_allow_html=True)
 
     # Display chat history
     for msg in st.session_state.messages:
@@ -361,13 +571,13 @@ def main():
             if msg.get("chart"):
                 render_chart(msg["chart"])
 
-    bottom_anchor = st.empty()
-    bottom_anchor.markdown('<div id="chat-bottom"></div>', unsafe_allow_html=True)
-
     # Question input
     question = st.chat_input("请输入您的问题...")
 
     if question:
+        # 添加用户问题锚点标记
+        question_anchor.markdown(f'<div id="question-{len(st.session_state.messages)}">{question}</div>', unsafe_allow_html=True)
+
         # Interrupt: cancel previous request by generating new request_id
         new_request_id = str(uuid.uuid4())
         st.session_state.request_id = new_request_id
@@ -424,17 +634,14 @@ def main():
                             if event_type == "thinking" or event_type == "tool_call":
                                 msg_text = event.get("message", event.get("tool", ""))
                                 message_placeholder.info(f"🤔 {msg_text}")
-                                scroll_to_bottom()
 
                             elif event_type == "tool_result":
                                 message_placeholder.success("✅ 工具执行完成")
-                                scroll_to_bottom()
 
                             elif event_type == "token":
                                 chunk = event.get("chunk", "")
                                 full_response += chunk
                                 message_placeholder.markdown(full_response + "▌")
-                                scroll_to_bottom()
 
                             elif event_type == "final":
                                 chunk = event.get("chunk", "")
@@ -445,33 +652,26 @@ def main():
                                     is_report = True
                                     message_placeholder.empty()
                                     render_multi_region_report(parse_report_data(full_response))
-                                    scroll_to_bottom()
                                 elif is_analysis_report(full_response):
                                     is_report = True
                                     message_placeholder.empty()
                                     render_analysis_report(parse_report_data(full_response))
-                                    scroll_to_bottom()
                                 else:
                                     message_placeholder.markdown(full_response)
-                                    scroll_to_bottom()
 
                                 chart_data = event.get("chart") if isinstance(event.get("chart"), dict) else None
-                                scroll_to_bottom()
 
                             elif event_type == "done":
                                 if cancelled:
                                     break
                                 if not is_report:
                                     message_placeholder.markdown(full_response)
-                                    scroll_to_bottom()
                                 if chart_data:
                                     render_chart(chart_data)
-                                    scroll_to_bottom()
                                 break
 
                             elif event_type == "error":
                                 st.error(f"错误: {event.get('error', '未知错误')}")
-                                scroll_to_bottom()
                                 break
 
             except requests.exceptions.ConnectionError:
@@ -490,8 +690,8 @@ def main():
         # Reset processing flag
         st.session_state.processing = False
 
-        # Auto-scroll to bottom after response
-        scroll_to_bottom()
+        # 响应完成后滚动到用户问题位置
+        scroll_to_top()
 
 
 if __name__ == "__main__":
